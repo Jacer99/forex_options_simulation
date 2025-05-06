@@ -12,6 +12,7 @@ from scipy.stats import norm, poisson
 import logging
 import yaml
 from numba import jit
+import math
 
 # Configure logging
 logging.basicConfig(
@@ -19,6 +20,14 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Pre-compute factorial values for poisson PMF calculation
+@jit(nopython=True)
+def poisson_pmf(k, lambda_val):
+    """
+    Numba-compatible implementation of Poisson PMF.
+    """
+    return np.exp(-lambda_val) * (lambda_val ** k) / math.factorial(k)
 
 # Compile critical functions with Numba for performance
 @jit(nopython=True)
@@ -54,8 +63,8 @@ def _jd_price_jit(spot, strike, T, r_d, r_f, vol, lambda_jump, jump_mean, jump_s
     
     # Sum over number of jumps
     for n in range(n_terms):
-        # Probability of exactly n jumps
-        p_n_jumps = poisson.pmf(n, lambda_jump * T)
+        # Probability of exactly n jumps (using our custom function)
+        p_n_jumps = poisson_pmf(n, lambda_jump * T)
         
         # Adjusted volatility for n jumps
         vol_n = np.sqrt(vol**2 + n * jump_std**2 / T)

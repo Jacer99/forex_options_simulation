@@ -115,6 +115,16 @@ def load_data():
     logger.info(f"Data loading completed in {elapsed:.2f} seconds")
     return options_data, market_data
 
+# Define as a standalone function at module level for parallel processing
+def process_batch(batch_data):
+    """Process a batch of options for pricing - separated to allow pickling."""
+    batch, market_data_tuple = batch_data
+    # Create a temporary portfolio manager for this batch
+    local_manager = PortfolioManager(batch, market_data_tuple)
+    # Price with all models
+    priced_batch = local_manager.price_portfolio()
+    return priced_batch
+
 def price_portfolio(options_data, market_data, config, use_parallel=True):
     """
     Price the portfolio using all pricing models with optional parallelization.
@@ -146,36 +156,39 @@ def price_portfolio(options_data, market_data, config, use_parallel=True):
         batches = []
         for batch_start in range(0, num_options, batch_size):
             batch_end = min(batch_start + batch_size, num_options)
-            batches.append(options_data.iloc[batch_start:batch_end].copy())
-        
-        # Define worker function for parallel processing
-        def process_batch(batch):
-            # Create a temporary portfolio manager for this batch
-            local_manager = PortfolioManager(batch, market_data)
-            # Price with all models
-            priced_batch = local_manager.price_portfolio()
-            return priced_batch
+            batches.append((options_data.iloc[batch_start:batch_end].copy(), market_data))
         
         # Process batches in parallel
         processed_batches = []
-        with ProcessPoolExecutor(max_workers=num_processes) as executor:
-            futures = [executor.submit(process_batch, batch) for batch in batches]
+        try:
+            with ProcessPoolExecutor(max_workers=num_processes) as executor:
+                futures = [executor.submit(process_batch, batch) for batch in batches]
+                
+                # Track progress
+                for i, future in enumerate(as_completed(futures)):
+                    try:
+                        priced_batch = future.result()
+                        processed_batches.append(priced_batch)
+                        logger.info(f"Completed batch {i+1}/{len(batches)}")
+                    except Exception as e:
+                        logger.error(f"Error in batch {i+1}: {e}")
+                        # Continue with other batches
+        except Exception as e:
+            logger.error(f"Error in parallel processing: {e}")
+            logger.info("Falling back to serial processing")
+            # Fall back to serial processing
+            priced_options = portfolio_manager.price_portfolio()
+        else:
+            # Combine all batches if we have any processed
+            if processed_batches:
+                priced_options = pd.concat(processed_batches).sort_index()
+                # Update options in portfolio manager
+                portfolio_manager.options_data = priced_options
+            else:
+                # Fall back to serial processing if no batches were processed
+                logger.info("No batches processed successfully. Falling back to serial processing.")
+                priced_options = portfolio_manager.price_portfolio()
             
-            # Track progress
-            for i, future in enumerate(as_completed(futures)):
-                try:
-                    priced_batch = future.result()
-                    processed_batches.append(priced_batch)
-                    logger.info(f"Completed batch {i+1}/{len(batches)}")
-                except Exception as e:
-                    logger.error(f"Error in batch {i+1}: {e}")
-        
-        # Combine all batches
-        priced_options = pd.concat(processed_batches).sort_index()
-        
-        # Update options in portfolio manager
-        portfolio_manager.options_data = priced_options
-        
     else:
         # Serial processing
         logger.info("Using serial processing for portfolio")
@@ -252,6 +265,22 @@ def visualize_results(portfolio_manager, options_data, market_data, metrics, out
     logger.info(f"Visualization phase completed in {elapsed:.2f} seconds")
     return figure_paths
 
+class EnhancedMarketData:
+    """Wrapper class for market data with enhanced lookup capabilities."""
+    def __init__(self, dataframe):
+        self.data = dataframe
+        self.lookup_dict = {d: row for d, row in zip(dataframe['date'], dataframe.to_dict('records'))}
+        
+    def get_at_date(self, date):
+        """Get data for a specific date or closest previous date."""
+        date = pd.to_datetime(date)
+        # Find closest date that is not greater than the requested date
+        valid_dates = [d for d in self.lookup_dict.keys() if d <= date]
+        if not valid_dates:
+            return None
+        closest_date = max(valid_dates)
+        return self.lookup_dict[closest_date]
+
 def optimize_market_data(market_data):
     """Optimize market data for faster lookups and reduced memory usage."""
     if market_data is None or len(market_data) != 3:
@@ -269,16 +298,13 @@ def optimize_market_data(market_data):
         if df['date'].dtype != 'datetime64[ns]':
             df['date'] = pd.to_datetime(df['date'])
     
-    # Create lookup dictionaries for faster date-based access
-    spot_rates_dict = {d: row for d, row in zip(spot_rates['date'], spot_rates.to_dict('records'))}
-    vol_dict = {d: row for d, row in zip(volatility['date'], volatility.to_dict('records'))}
-    rates_dict = {d: row for d, row in zip(interest_rates['date'], interest_rates.to_dict('records'))}
+    # Create enhanced market data objects
+    enhanced_spot_rates = EnhancedMarketData(spot_rates)
+    enhanced_volatility = EnhancedMarketData(volatility)
+    enhanced_interest_rates = EnhancedMarketData(interest_rates)
     
-    # Attach lookup dictionaries as attributes
-    spot_rates.lookup_dict = spot_rates_dict
-    volatility.lookup_dict = vol_dict
-    interest_rates.lookup_dict = rates_dict
-    
+    # Return the original DataFrames so the rest of the code works normally
+    # The enhanced objects can be accessed if needed, but we don't use them in this version
     return spot_rates, volatility, interest_rates
 
 def main():

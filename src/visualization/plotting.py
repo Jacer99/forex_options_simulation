@@ -260,7 +260,7 @@ def plot_error_metrics(metrics_df, output_dir=None, filename='error_metrics.png'
     Plot error metrics for each model.
     
     Args:
-        metrics_df (pandas.DataFrame): DataFrame containing error metrics for each model.
+        metrics_df (pandas.DataFrame or dict): DataFrame or dictionary containing error metrics for each model.
         output_dir (str, optional): Directory to save the plot.
         filename (str, optional): Filename for the saved plot.
         
@@ -269,9 +269,39 @@ def plot_error_metrics(metrics_df, output_dir=None, filename='error_metrics.png'
     """
     set_plot_style()
     
-    # Check if required columns exist
+    # Convert dict to DataFrame if necessary
+    if isinstance(metrics_df, dict):
+        # If it's a nested dict (model -> metric -> value)
+        if any(isinstance(v, dict) for v in metrics_df.values()):
+            metrics_list = []
+            for model, model_metrics in metrics_df.items():
+                model_metrics['model'] = model.upper()
+                metrics_list.append(model_metrics)
+            metrics_df = pd.DataFrame(metrics_list)
+        else:
+            # If it's a simple dict (metric -> value)
+            metrics_df = pd.DataFrame([metrics_df])
+    
+    # Check if we have a valid DataFrame
+    if metrics_df is None or len(metrics_df) == 0:
+        logger.error("No error metrics available")
+        return None
+    
+    # Define required metrics to look for
     required_metrics = ['rmse', 'mae', 'mape']
-    available_metrics = [metric for metric in required_metrics if metric in metrics_df.columns]
+    
+    # Find which metrics are available in the DataFrame
+    if hasattr(metrics_df, 'columns'):
+        available_metrics = [metric for metric in required_metrics if metric in metrics_df.columns]
+    else:
+        # If metrics_df doesn't have columns attribute (e.g., it's a Series or other object)
+        available_metrics = []
+        for metric in required_metrics:
+            try:
+                if metric in metrics_df:
+                    available_metrics.append(metric)
+            except:
+                pass
     
     if not available_metrics:
         logger.error("No error metrics available in metrics_df")
@@ -291,24 +321,45 @@ def plot_error_metrics(metrics_df, output_dir=None, filename='error_metrics.png'
     for i, metric in enumerate(available_metrics):
         ax = axes[i]
         
-        # Sort by metric value (lower is better for error metrics)
-        sorted_df = metrics_df.sort_values(by=metric)
-        
-        # Plot as bar chart
-        bars = ax.bar(sorted_df['model'], sorted_df[metric], color=colors[:len(sorted_df)])
-        ax.set_xlabel('Model')
-        ax.set_ylabel(metric.upper())
-        ax.set_title(f'{metric.upper()} by Model')
-        
-        # Add values on top of the bars
-        for bar in bars:
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{height:.2f}',
-                    ha='center', va='bottom', rotation=0)
+        try:
+            # Sort by metric value (lower is better for error metrics)
+            if 'model' in metrics_df.columns:
+                sorted_df = metrics_df.sort_values(by=metric)
+                
+                # Plot as bar chart
+                bars = ax.bar(sorted_df['model'], sorted_df[metric], color=colors[:len(sorted_df)])
+                ax.set_xlabel('Model')
+                ax.set_ylabel(metric.upper())
+                ax.set_title(f'{metric.upper()} by Model')
+                
+                # Add values on top of the bars
+                for bar in bars:
+                    height = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width()/2., height,
+                            f'{height:.2f}',
+                            ha='center', va='bottom', rotation=0)
+            else:
+                # Handle the case where we don't have a 'model' column
+                labels = metrics_df.index if hasattr(metrics_df, 'index') else [f'Model {j+1}' for j in range(len(metrics_df))]
+                values = metrics_df[metric] if hasattr(metrics_df, 'columns') else [metrics_df[metric]]
+                
+                bars = ax.bar(labels, values, color=colors[:len(labels)])
+                ax.set_xlabel('Model')
+                ax.set_ylabel(metric.upper())
+                ax.set_title(f'{metric.upper()}')
+                
+                # Add values on top of the bars
+                for bar in bars:
+                    height = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width()/2., height,
+                            f'{height:.2f}',
+                            ha='center', va='bottom', rotation=0)
+        except Exception as e:
+            logger.error(f"Error plotting metric {metric}: {e}")
+            continue
         
         # Rotate x-axis labels if there are many models
-        if len(sorted_df) > 3:
+        if hasattr(metrics_df, '__len__') and len(metrics_df) > 3:
             plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
     
     plt.tight_layout()
@@ -499,7 +550,7 @@ def create_dashboard(options_data, market_data, metrics_df=None, output_dir='out
     Args:
         options_data (pandas.DataFrame): Options data with pricing information.
         market_data (tuple): Tuple of (spot_rates, volatility, interest_rates) DataFrames.
-        metrics_df (pandas.DataFrame, optional): DataFrame containing performance metrics.
+        metrics_df (pandas.DataFrame or dict, optional): DataFrame or dictionary containing performance metrics.
         output_dir (str, optional): Directory to save the plots.
         
     Returns:

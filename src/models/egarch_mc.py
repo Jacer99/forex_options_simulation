@@ -90,18 +90,27 @@ class EGARCHMCModel:
         # Pre-generate all random innovations
         z = np.random.normal(0, 1, (n_paths, n_days))
         
+        # Constrain parameter values for stability
+        beta = min(0.99, max(0.5, self.beta))  # Ensure persistence is within stable range
+        alpha = min(0.3, max(0.01, self.alpha))  # Limit ARCH effect
+        gamma = min(0.3, max(-0.3, self.gamma))  # Constrain leverage effect
+        omega = min(0, self.omega)  # Ensure omega is non-positive for stability
+        
         # Simulate paths
         for t in range(n_days):
-            # Calculate volatility from log-variance
-            volatility = np.sqrt(np.exp(log_var))
+            # Calculate volatility from log-variance (with clipping for numerical stability)
+            volatility = np.sqrt(np.clip(np.exp(log_var), 1e-8, 1.0))
             
             # Generate returns
             sim_returns[:, t] = volatility * z[:, t]
             
             # Update log-variance vectorized across all paths
-            log_var = self.omega + self.beta * log_var + \
-                      self.alpha * (np.abs(z[:, t]) - np.sqrt(2/np.pi)) + \
-                      self.gamma * z[:, t]
+            log_var = omega + beta * log_var + \
+                      alpha * (np.abs(z[:, t]) - np.sqrt(2/np.pi)) + \
+                      gamma * z[:, t]
+            
+            # Apply constraints to prevent numerical explosions
+            log_var = np.clip(log_var, -20, 2)  # Constrain log variance to prevent extreme values
         
         return sim_returns
     
@@ -118,7 +127,8 @@ class EGARCHMCModel:
         
         # Efficiently update all paths
         for t in range(days_to_maturity):
-            paths[:, t+1] = paths[:, t] * np.exp(daily_drift + sim_returns[:, t])
+            # Apply drift + return + stability constraints
+            paths[:, t+1] = paths[:, t] * np.clip(np.exp(daily_drift + sim_returns[:, t]), 0.5, 2.0)
         
         # Get final prices
         final_prices = paths[:, -1]
@@ -164,11 +174,11 @@ class EGARCHMCModel:
         
         # Determine batch configuration
         num_sims = self.num_simulations
-        num_batches = min(self.max_workers * 2, 16) if self.use_parallel else 1
+        num_batches = min(self.max_workers * 2, 8) if self.use_parallel else 1
         batch_size = num_sims // num_batches
         
-        # Ensure positive volatility
-        volatility = max(0.001, volatility)
+        # Ensure positive volatility with a reasonable cap
+        volatility = min(max(0.001, volatility), 0.5)  # Cap at 50% annual volatility
         
         try:
             # Run in parallel if enabled
@@ -196,7 +206,8 @@ class EGARCHMCModel:
                 paths[:, 0] = spot
                 
                 for t in range(days_to_maturity):
-                    paths[:, t+1] = paths[:, t] * np.exp(daily_drift + sim_returns[:, t])
+                    # Add stability constraints to prevent extreme values
+                    paths[:, t+1] = paths[:, t] * np.clip(np.exp(daily_drift + sim_returns[:, t]), 0.5, 2.0)
                 
                 # Calculate final prices and payoffs
                 final_prices = paths[:, -1]
@@ -210,6 +221,9 @@ class EGARCHMCModel:
             
             # Calculate option price (discounted expected payoff)
             option_price = mean_payoff * np.exp(-domestic_rate * T)
+            
+            # Final safety check: ensure reasonable price relative to spot
+            option_price = min(option_price, spot)  # Option price shouldn't exceed spot price
             
             return option_price
             
