@@ -30,11 +30,11 @@ models:
   
   # E-GARCH Monte Carlo parameters
   egarch:
-    num_simulations: 10000     # Number of Monte Carlo simulations
-    omega: -0.10               # EGARCH omega parameter
-    alpha: 0.15                # EGARCH alpha parameter
-    gamma: -0.12               # EGARCH gamma parameter (leverage effect)
-    beta: 0.95                 # EGARCH beta parameter (persistence)
+    num_simulations: 5000     # Number of Monte Carlo simulations
+    omega: -0.05               # EGARCH omega parameter
+    alpha: 0.10                # EGARCH alpha parameter
+    gamma: -0.05               # EGARCH gamma parameter (leverage effect)
+    beta: 0.90                 # EGARCH beta parameter (persistence)
   
   # Merton Jump-Diffusion parameters
   jump_diffusion:
@@ -44,10 +44,10 @@ models:
   
   # SABR model parameters
   sabr:
-    alpha: 0.15                # Initial volatility
+    alpha: 0.18                # Initial volatility
     beta: 0.7                  # CEV parameter (0 = normal, 1 = lognormal)
     rho: -0.3                  # Correlation between spot and vol
-    nu: 0.4                    # Volatility of volatility
+    nu: 0.6                    # Volatility of volatility
 
 # Simulation parameters
 simulation:

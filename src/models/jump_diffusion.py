@@ -30,22 +30,14 @@ def poisson_pmf(k, lambda_val):
     return np.exp(-lambda_val) * (lambda_val ** k) / math.factorial(k)
 
 # Compile critical functions with Numba for performance
+
+# In src/models/jump_diffusion.py
+# Modified JIT function
 @jit(nopython=True)
 def _jd_price_jit(spot, strike, T, r_d, r_f, vol, lambda_jump, jump_mean, jump_std, option_type_call, n_terms=15):
     """
     JIT-compiled function to calculate Jump-Diffusion option price.
-    
-    Args:
-        spot, strike: Spot and strike prices
-        T: Time to maturity in years
-        r_d, r_f: Domestic and foreign interest rates
-        vol: Volatility
-        lambda_jump, jump_mean, jump_std: Jump parameters
-        option_type_call: Boolean (True for call, False for put)
-        n_terms: Number of terms in the series
-        
-    Returns:
-        float: Option price
+    Using custom implementation of norm.cdf instead of scipy.stats
     """
     # Handle edge cases
     if T <= 0.0 or vol <= 0.0:
@@ -63,8 +55,10 @@ def _jd_price_jit(spot, strike, T, r_d, r_f, vol, lambda_jump, jump_mean, jump_s
     
     # Sum over number of jumps
     for n in range(n_terms):
-        # Probability of exactly n jumps (using our custom function)
-        p_n_jumps = poisson_pmf(n, lambda_jump * T)
+        # Probability of exactly n jumps
+        p_n_jumps = np.exp(-lambda_jump * T) * (lambda_jump * T)**n
+        for i in range(1, n+1):
+            p_n_jumps = p_n_jumps / i  # factorial calculation
         
         # Adjusted volatility for n jumps
         vol_n = np.sqrt(vol**2 + n * jump_std**2 / T)
@@ -72,19 +66,47 @@ def _jd_price_jit(spot, strike, T, r_d, r_f, vol, lambda_jump, jump_mean, jump_s
         # Adjusted drift for n jumps
         drift_n = adjusted_drift + n * jump_mean / T
         
-        # Black-Scholes price for n jumps
+        # d1 and d2 for Black-Scholes
         d1 = (np.log(spot / strike) + (drift_n + 0.5 * vol_n**2) * T) / (vol_n * np.sqrt(T))
         d2 = d1 - vol_n * np.sqrt(T)
         
+        # Custom implementation of norm.cdf for Numba compatibility
+        # Use approximation of normal CDF
         if option_type_call:
-            bs_price = spot * np.exp(-r_f * T) * norm.cdf(d1) - strike * np.exp(-r_d * T) * norm.cdf(d2)
+            bs_price = spot * np.exp(-r_f * T) * _norm_cdf(d1) - strike * np.exp(-r_d * T) * _norm_cdf(d2)
         else:
-            bs_price = strike * np.exp(-r_d * T) * norm.cdf(-d2) - spot * np.exp(-r_f * T) * norm.cdf(-d1)
+            bs_price = strike * np.exp(-r_d * T) * _norm_cdf(-d2) - spot * np.exp(-r_f * T) * _norm_cdf(-d1)
         
         # Add weighted contribution
         option_price += p_n_jumps * bs_price
     
     return option_price
+
+
+@jit(nopython=True)
+def _norm_cdf(x):
+    """
+    Approximation of the normal CDF compatible with Numba.
+    """
+    # Constants for approximation
+    a1 = 0.254829592
+    a2 = -0.284496736
+    a3 = 1.421413741
+    a4 = -1.453152027
+    a5 = 1.061405429
+    p = 0.3275911
+    
+    # Save the sign
+    sign = 1.0
+    if x < 0.0:
+        sign = -1.0
+        x = -x
+    
+    # A&S formula 7.1.26
+    t = 1.0 / (1.0 + p * x)
+    y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * np.exp(-x * x)
+    
+    return 0.5 * (1.0 + sign * y)
 
 class JumpDiffusionModel:
     """

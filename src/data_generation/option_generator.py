@@ -45,6 +45,13 @@ class OptionGenerator:
         # Initialize empty portfolio
         self.options = []
         
+        # Initialize market data handler for spot rate lookup
+        from src.market_data.data_handler import MarketDataHandler
+        self.market_handler = MarketDataHandler(config_path=config_path)
+        
+        # Load market data if available
+        self.spot_rates, self.volatility, self.interest_rates = self.market_handler.load_market_data()
+        
         logger.info("Option Generator initialized with configuration from %s", config_path)
     
     def _load_config(self, config_path):
@@ -171,6 +178,17 @@ class OptionGenerator:
                 logger.warning(f"Cannot add option at {issue_date.strftime('%Y-%m-%d')} - would exceed max active notional")
                 return None
         
+        # Get historical spot rate at issue date
+        issue_date_str = issue_date.strftime('%Y-%m-%d')
+        spot_rate = self.market_handler.get_rate_at_date(issue_date_str, 'spot')
+        
+        # Get interest rates at issue date
+        eur_rate = self.market_handler.get_rate_at_date(issue_date_str, 'eur_rate')
+        tnd_rate = self.market_handler.get_rate_at_date(issue_date_str, 'tnd_rate')
+        
+        # Get historical volatility at issue date
+        hist_vol = self.market_handler.get_rate_at_date(issue_date_str, 'volatility')
+        
         # Create option contract
         option = {
             'option_id': str(uuid.uuid4())[:8],  # Generate a unique ID
@@ -181,11 +199,11 @@ class OptionGenerator:
             'issue_date': issue_date.strftime('%Y-%m-%d'),
             'maturity_date': maturity_date.strftime('%Y-%m-%d'),
             'days_to_maturity': (maturity_date - issue_date).days,
-            'spot_rate_at_issue': self.market_config['spot_price'],
-            'domestic_rate': self.market_config['eur_interest_rate'],
-            'foreign_rate': self.market_config['tnd_interest_rate'],
+            'spot_rate_at_issue': spot_rate,  # Use actual historical spot rate
+            'domestic_rate': eur_rate,         # Use actual interest rate
+            'foreign_rate': tnd_rate,          # Use actual interest rate
             # Strike price will be set slightly out of the money
-            'strike_price': round(self.market_config['spot_price'] * (1 + random.uniform(0.01, 0.1)), 4),
+            'strike_price': round(spot_rate * (1 + random.uniform(0.01, 0.1)), 4),
             'implied_volatility': None,  # Will be calculated by pricing models
             'bs_price': None,            # Black-Scholes price
             'egarch_price': None,        # E-GARCH MC price
