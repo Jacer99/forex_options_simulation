@@ -1,8 +1,9 @@
 """
-Optimized Main Script for Forex Options Portfolio Simulation
+Modified Main Script for Forex Options Portfolio Simulation
 
-This script orchestrates the entire simulation process with significant performance improvements,
-from data generation to portfolio pricing, evaluation, and visualization.
+This script orchestrates the entire simulation process with significant changes:
+1. EGARCH model has been completely removed
+2. All options now use the same fixed spot rate from config
 """
 
 import os
@@ -45,7 +46,7 @@ def generate_data(config):
     logger.info("Starting data generation phase")
     start_time = time.time()
     
-    # Generate option contracts
+    # Generate option contracts with fixed spot rate
     generator = OptionGenerator(config_path='config.yaml')
     options_data = generator.generate_portfolio()
     generator.save_portfolio_to_csv()
@@ -58,10 +59,15 @@ def generate_data(config):
     logger.info(f"Data generation phase completed in {elapsed:.2f} seconds")
     return options_data, market_data
 
-def load_data():
+def load_data(config):
     """Load previously generated option contracts and market data with validation."""
     logger.info("Loading existing data")
     start_time = time.time()
+    
+    # Get fixed spot rate from config
+    fixed_spot = config['market']['spot_price']
+    fixed_eur_rate = config['market']['eur_interest_rate']
+    fixed_tnd_rate = config['market']['tnd_interest_rate']
     
     # Load option contracts
     options_file = "data/generated/option_contracts.csv"
@@ -72,6 +78,11 @@ def load_data():
     try:
         options_data = pd.read_csv(options_file)
         logger.info(f"Loaded {len(options_data)} option contracts")
+        
+        # Force all options to use the fixed spot rate
+        options_data['spot_rate_at_issue'] = fixed_spot
+        options_data['domestic_rate'] = fixed_eur_rate
+        options_data['foreign_rate'] = fixed_tnd_rate
         
         # Validate essential columns
         required_columns = ['option_id', 'strike_price', 'days_to_maturity', 'issue_date', 'maturity_date', 'notional', 'type']
@@ -121,13 +132,13 @@ def process_batch(batch_data):
     batch, market_data_tuple = batch_data
     # Create a temporary portfolio manager for this batch
     local_manager = PortfolioManager(batch, market_data_tuple)
-    # Price with all models
+    # Price with all models (EGARCH removed)
     priced_batch = local_manager.price_portfolio()
     return priced_batch
 
 def price_portfolio(options_data, market_data, config, use_parallel=True):
     """
-    Price the portfolio using all pricing models with optional parallelization.
+    Price the portfolio using available pricing models (EGARCH removed).
     
     Args:
         options_data: Options data DataFrame
@@ -141,7 +152,7 @@ def price_portfolio(options_data, market_data, config, use_parallel=True):
     logger.info("Starting portfolio pricing phase")
     start_time = time.time()
     
-    # Initialize portfolio manager
+    # Initialize portfolio manager with fixed spot rate
     portfolio_manager = PortfolioManager(options_data, market_data)
     
     if use_parallel and len(options_data) > 20:  # Only parallelize for larger portfolios
@@ -265,52 +276,10 @@ def visualize_results(portfolio_manager, options_data, market_data, metrics, out
     logger.info(f"Visualization phase completed in {elapsed:.2f} seconds")
     return figure_paths
 
-class EnhancedMarketData:
-    """Wrapper class for market data with enhanced lookup capabilities."""
-    def __init__(self, dataframe):
-        self.data = dataframe
-        self.lookup_dict = {d: row for d, row in zip(dataframe['date'], dataframe.to_dict('records'))}
-        
-    def get_at_date(self, date):
-        """Get data for a specific date or closest previous date."""
-        date = pd.to_datetime(date)
-        # Find closest date that is not greater than the requested date
-        valid_dates = [d for d in self.lookup_dict.keys() if d <= date]
-        if not valid_dates:
-            return None
-        closest_date = max(valid_dates)
-        return self.lookup_dict[closest_date]
-
-def optimize_market_data(market_data):
-    """Optimize market data for faster lookups and reduced memory usage."""
-    if market_data is None or len(market_data) != 3:
-        return market_data
-    
-    spot_rates, volatility, interest_rates = market_data
-    
-    # Sort all dataframes by date for faster lookups
-    spot_rates = spot_rates.sort_values('date')
-    volatility = volatility.sort_values('date')
-    interest_rates = interest_rates.sort_values('date')
-    
-    # Convert to datetime if not already
-    for df in [spot_rates, volatility, interest_rates]:
-        if df['date'].dtype != 'datetime64[ns]':
-            df['date'] = pd.to_datetime(df['date'])
-    
-    # Create enhanced market data objects
-    enhanced_spot_rates = EnhancedMarketData(spot_rates)
-    enhanced_volatility = EnhancedMarketData(volatility)
-    enhanced_interest_rates = EnhancedMarketData(interest_rates)
-    
-    # Return the original DataFrames so the rest of the code works normally
-    # The enhanced objects can be accessed if needed, but we don't use them in this version
-    return spot_rates, volatility, interest_rates
-
 def main():
-    """Main function to run the optimized Forex Options Portfolio Simulation."""
+    """Main function to run the modified Forex Options Portfolio Simulation."""
     overall_start_time = time.time()
-    logger.info("Starting Forex Options Portfolio Simulation")
+    logger.info("Starting Modified Forex Options Portfolio Simulation")
     
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Forex Options Portfolio Simulation")
@@ -334,14 +303,11 @@ def main():
     if args.generate:
         options_data, market_data = generate_data(config)
     else:
-        options_data, market_data = load_data()
+        options_data, market_data = load_data(config)
     
     if options_data is None or market_data is None:
         logger.error("Failed to load or generate data. Exiting.")
         return
-    
-    # Optimize market data for faster lookups
-    market_data = optimize_market_data(market_data)
     
     # Price portfolio
     if not args.skip_pricing:
@@ -369,7 +335,7 @@ def main():
         logger.info("Skipping visualization phase")
     
     overall_elapsed = time.time() - overall_start_time
-    logger.info(f"Forex Options Portfolio Simulation completed in {overall_elapsed:.2f} seconds. Results saved to {output_dir}")
+    logger.info(f"Modified Forex Options Portfolio Simulation completed in {overall_elapsed:.2f} seconds. Results saved to {output_dir}")
 
 if __name__ == "__main__":
     main()

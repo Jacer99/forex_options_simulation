@@ -1,8 +1,9 @@
 """
-Portfolio Manager Module
+Modified Portfolio Manager Module
 
 This module manages a portfolio of European FX options and provides functions
 for pricing, risk management, and performance evaluation.
+The EGARCH model has been removed, and all options now use the same spot rate.
 """
 
 import os
@@ -15,7 +16,7 @@ import matplotlib.pyplot as plt
 
 # Import pricing models
 from src.models.black_scholes import BlackScholesModel
-from src.models.egarch_mc import EGARCHMCModel
+# EGARCH model has been removed
 from src.models.jump_diffusion import JumpDiffusionModel
 from src.models.sabr import SABRModel
 
@@ -40,10 +41,11 @@ class PortfolioManager:
         """
         self.config = self._load_config(config_path)
         self.output_config = self.config['output']
+        self.market_config = self.config['market']
         
         # Initialize pricing models
         self.bs_model = BlackScholesModel()
-        self.egarch_model = EGARCHMCModel(config_path)
+        # EGARCH model has been removed
         self.jd_model = JumpDiffusionModel(config_path)
         self.sabr_model = SABRModel(config_path)
         
@@ -51,7 +53,12 @@ class PortfolioManager:
         self.options_data = options_data
         self.market_data = market_data
         
-        logger.info("Portfolio Manager initialized")
+        # Use fixed spot rate for all options
+        self.fixed_spot_rate = self.market_config['spot_price']
+        self.fixed_eur_rate = self.market_config['eur_interest_rate']
+        self.fixed_tnd_rate = self.market_config['tnd_interest_rate']
+        
+        logger.info("Portfolio Manager initialized with fixed spot rate: %s", self.fixed_spot_rate)
     
     def _load_config(self, config_path):
         """
@@ -79,8 +86,14 @@ class PortfolioManager:
         """
         try:
             df = pd.read_csv(filepath)
+            
+            # Set all options to use the fixed spot rate
+            df['spot_rate_at_issue'] = self.fixed_spot_rate
+            df['domestic_rate'] = self.fixed_eur_rate
+            df['foreign_rate'] = self.fixed_tnd_rate
+            
             self.options_data = df
-            logger.info(f"Options data loaded from {filepath}")
+            logger.info(f"Options data loaded from {filepath} with fixed spot rate {self.fixed_spot_rate}")
             return df
         except Exception as e:
             logger.error(f"Error loading options data: {e}")
@@ -98,7 +111,7 @@ class PortfolioManager:
     
     def price_portfolio(self):
         """
-        Price the portfolio using all available pricing models.
+        Price the portfolio using all available pricing models (except EGARCH).
         
         Returns:
             pandas.DataFrame: Options data with added pricing information.
@@ -111,22 +124,35 @@ class PortfolioManager:
             logger.error("No market data. Set market data first.")
             return None
         
-        logger.info("Pricing portfolio using all models")
+        logger.info("Pricing portfolio using Black-Scholes, Jump-Diffusion, and SABR models")
         
         # Make a copy of the options data
         df = self.options_data.copy()
         
+        # Set all options to use the fixed spot rate
+        df['spot_rate_at_issue'] = self.fixed_spot_rate
+        df['domestic_rate'] = self.fixed_eur_rate
+        df['foreign_rate'] = self.fixed_tnd_rate
+        
         # First, price with Black-Scholes to get implied volatilities
         df = self.bs_model.price_options_portfolio(df, self.market_data)
         
-        # Then, price with other models
-        df = self.egarch_model.price_options_portfolio(df, self.market_data)
+        # Then, price with other models (except EGARCH)
         df = self.jd_model.price_options_portfolio(df, self.market_data)
         df = self.sabr_model.price_options_portfolio(df, self.market_data)
         
+        # Remove EGARCH price column if it exists
+        if 'egarch_price' in df.columns:
+            df = df.drop(columns=['egarch_price'])
+            if 'egarch_pnl' in df.columns:
+                df = df.drop(columns=['egarch_pnl'])
+            if 'egarch_bs_spread' in df.columns:
+                df = df.drop(columns=['egarch_bs_spread'])
+            if 'egarch_abs_error' in df.columns:
+                df = df.drop(columns=['egarch_abs_error'])
+        
         # Calculate model spreads
-        if all(col in df.columns for col in ['bs_price', 'egarch_price', 'jd_price', 'sabr_price']):
-            df['egarch_bs_spread'] = df['egarch_price'] - df['bs_price']
+        if all(col in df.columns for col in ['bs_price', 'jd_price', 'sabr_price']):
             df['jd_bs_spread'] = df['jd_price'] - df['bs_price']
             df['sabr_bs_spread'] = df['sabr_price'] - df['bs_price']
         
@@ -162,11 +188,11 @@ class PortfolioManager:
             try:
                 # Calculate the Greeks
                 greeks = self.bs_model.calculate_greeks(
-                    spot=option['spot_rate_at_issue'],
+                    spot=self.fixed_spot_rate,
                     strike=option['strike_price'],
                     days_to_maturity=option['days_to_maturity'],
-                    domestic_rate=option['domestic_rate'],
-                    foreign_rate=option['foreign_rate'],
+                    domestic_rate=self.fixed_eur_rate,
+                    foreign_rate=self.fixed_tnd_rate,
                     volatility=option['implied_volatility'],
                     option_type=option['type']
                 )
@@ -269,7 +295,7 @@ class PortfolioManager:
         df = self.options_data.copy()
         
         # Add columns for PnL if they don't exist
-        for col in ['bs_pnl', 'egarch_pnl', 'jd_pnl', 'sabr_pnl']:
+        for col in ['bs_pnl', 'jd_pnl', 'sabr_pnl']:  # EGARCH removed
             if col not in df.columns:
                 df[col] = np.nan
         
@@ -284,9 +310,6 @@ class PortfolioManager:
                 if not pd.isna(option['bs_price']):
                     df.at[i, 'bs_pnl'] = option['actual_payoff'] - option['bs_price'] * option['notional']
                 
-                if not pd.isna(option['egarch_price']):
-                    df.at[i, 'egarch_pnl'] = option['actual_payoff'] - option['egarch_price'] * option['notional']
-                
                 if not pd.isna(option['jd_price']):
                     df.at[i, 'jd_pnl'] = option['actual_payoff'] - option['jd_price'] * option['notional']
                 
@@ -299,7 +322,6 @@ class PortfolioManager:
         # Calculate total PnL for each model
         total_pnl = {
             'bs_total_pnl': df['bs_pnl'].sum(),
-            'egarch_total_pnl': df['egarch_pnl'].sum(),
             'jd_total_pnl': df['jd_pnl'].sum(),
             'sabr_total_pnl': df['sabr_pnl'].sum(),
         }
@@ -332,7 +354,7 @@ class PortfolioManager:
         df = self.options_data.copy()
         
         # Calculate performance metrics for each model
-        models = ['bs', 'egarch', 'jd', 'sabr']
+        models = ['bs', 'jd', 'sabr']  # EGARCH removed
         metrics = {}
         
         for model in models:
@@ -407,32 +429,29 @@ class PortfolioManager:
         logger.info(f"Options analysis saved to {os.path.join(output_dir, 'options_analysis.csv')}")
         
         # Calculate and save portfolio summary
-        if all(col in self.options_data.columns for col in ['bs_price', 'egarch_price', 'jd_price', 'sabr_price']):
+        if all(col in self.options_data.columns for col in ['bs_price', 'jd_price', 'sabr_price']):  # EGARCH removed
             summary = pd.DataFrame({
-                'Model': ['Black-Scholes', 'E-GARCH MC', 'Jump-Diffusion', 'SABR'],
+                'Model': ['Black-Scholes', 'Jump-Diffusion', 'SABR'],  # EGARCH removed
                 'Total_Price': [
                     (self.options_data['bs_price'] * self.options_data['notional']).sum(),
-                    (self.options_data['egarch_price'] * self.options_data['notional']).sum(),
                     (self.options_data['jd_price'] * self.options_data['notional']).sum(),
                     (self.options_data['sabr_price'] * self.options_data['notional']).sum()
                 ]
             })
             
             # Add PnL information if available
-            if all(col in self.options_data.columns for col in ['bs_pnl', 'egarch_pnl', 'jd_pnl', 'sabr_pnl']):
+            if all(col in self.options_data.columns for col in ['bs_pnl', 'jd_pnl', 'sabr_pnl']):  # EGARCH removed
                 summary['Total_PnL'] = [
                     self.options_data['bs_pnl'].sum(),
-                    self.options_data['egarch_pnl'].sum(),
                     self.options_data['jd_pnl'].sum(),
                     self.options_data['sabr_pnl'].sum()
                 ]
             
             # Add error metrics if available
-            error_columns = ['bs_abs_error', 'egarch_abs_error', 'jd_abs_error', 'sabr_abs_error']
+            error_columns = ['bs_abs_error', 'jd_abs_error', 'sabr_abs_error']  # EGARCH removed
             if all(col in self.options_data.columns for col in error_columns):
                 summary['RMSE'] = [
                     np.sqrt((self.options_data['bs_abs_error'] ** 2).mean()),
-                    np.sqrt((self.options_data['egarch_abs_error'] ** 2).mean()),
                     np.sqrt((self.options_data['jd_abs_error'] ** 2).mean()),
                     np.sqrt((self.options_data['sabr_abs_error'] ** 2).mean())
                 ]
@@ -441,76 +460,6 @@ class PortfolioManager:
             logger.info(f"Model summary saved to {os.path.join(output_dir, 'model_summary.csv')}")
         
         logger.info("All results saved successfully")
-    
-    def plot_spot_rates(self, output_dir=None):
-        """
-        Plot the EUR/TND spot rates.
-        
-        Args:
-            output_dir (str, optional): Directory to save the plot. Defaults to the output directory in the configuration.
-        """
-        if self.market_data is None:
-            logger.error("No market data. Nothing to plot.")
-            return
-        
-        # Get output directory
-        if output_dir is None:
-            output_dir = self.output_config['output_dir']
-        
-        # Create directory if it doesn't exist
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Get spot rates
-        spot_rates = self.market_data[0]
-        
-        # Create figure
-        plt.figure(figsize=(12, 6))
-        plt.plot(spot_rates['date'], spot_rates['EUR/TND'], label='EUR/TND Spot Rate')
-        plt.title('EUR/TND Spot Rate')
-        plt.xlabel('Date')
-        plt.ylabel('Rate')
-        plt.grid(True)
-        plt.legend()
-        
-        # Save plot
-        plt.savefig(os.path.join(output_dir, 'spot_rates.png'), dpi=300, bbox_inches='tight')
-        plt.close()
-        logger.info(f"Spot rates plot saved to {os.path.join(output_dir, 'spot_rates.png')}")
-    
-    def plot_volatility(self, output_dir=None):
-        """
-        Plot the historical volatility.
-        
-        Args:
-            output_dir (str, optional): Directory to save the plot. Defaults to the output directory in the configuration.
-        """
-        if self.market_data is None:
-            logger.error("No market data. Nothing to plot.")
-            return
-        
-        # Get output directory
-        if output_dir is None:
-            output_dir = self.output_config['output_dir']
-        
-        # Create directory if it doesn't exist
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Get volatility
-        volatility = self.market_data[1]
-        
-        # Create figure
-        plt.figure(figsize=(12, 6))
-        plt.plot(volatility['date'], volatility['historical_vol'] * 100, label='Historical Volatility')
-        plt.title('Historical Volatility of EUR/TND')
-        plt.xlabel('Date')
-        plt.ylabel('Volatility (%)')
-        plt.grid(True)
-        plt.legend()
-        
-        # Save plot
-        plt.savefig(os.path.join(output_dir, 'volatility.png'), dpi=300, bbox_inches='tight')
-        plt.close()
-        logger.info(f"Volatility plot saved to {os.path.join(output_dir, 'volatility.png')}")
     
     def plot_model_comparison(self, output_dir=None):
         """
@@ -531,23 +480,22 @@ class PortfolioManager:
         os.makedirs(output_dir, exist_ok=True)
         
         # Check if PnL information is available
-        if not all(col in self.options_data.columns for col in ['bs_pnl', 'egarch_pnl', 'jd_pnl', 'sabr_pnl']):
+        if not all(col in self.options_data.columns for col in ['bs_pnl', 'jd_pnl', 'sabr_pnl']):  # EGARCH removed
             logger.error("PnL information not available. Calculate PnL first.")
             return
         
         # Calculate total PnL for each model
         total_pnl = {
             'Black-Scholes': self.options_data['bs_pnl'].sum(),
-            'E-GARCH MC': self.options_data['egarch_pnl'].sum(),
             'Jump-Diffusion': self.options_data['jd_pnl'].sum(),
-            'SABR': self.options_data['sabr_pnl'].sum()
+            'SABR': self.options_data['sabr_pnl'].sum()  # EGARCH removed
         }
         
         # Create figure for total PnL comparison
         plt.figure(figsize=(12, 6))
         models = list(total_pnl.keys())
         pnls = list(total_pnl.values())
-        colors = ['blue', 'green', 'red', 'purple']
+        colors = ['blue', 'red', 'purple']  # EGARCH color removed
         
         bars = plt.bar(models, pnls, color=colors)
         plt.title('Total PnL by Model')
@@ -566,35 +514,3 @@ class PortfolioManager:
         plt.savefig(os.path.join(output_dir, 'pnl_comparison.png'), dpi=300, bbox_inches='tight')
         plt.close()
         logger.info(f"PnL comparison plot saved to {os.path.join(output_dir, 'pnl_comparison.png')}")
-        
-        # Create figure for RMSE comparison if error metrics are available
-        error_columns = ['bs_abs_error', 'egarch_abs_error', 'jd_abs_error', 'sabr_abs_error']
-        if all(col in self.options_data.columns for col in error_columns):
-            rmse = {
-                'Black-Scholes': np.sqrt((self.options_data['bs_abs_error'] ** 2).mean()),
-                'E-GARCH MC': np.sqrt((self.options_data['egarch_abs_error'] ** 2).mean()),
-                'Jump-Diffusion': np.sqrt((self.options_data['jd_abs_error'] ** 2).mean()),
-                'SABR': np.sqrt((self.options_data['sabr_abs_error'] ** 2).mean())
-            }
-            
-            plt.figure(figsize=(12, 6))
-            models = list(rmse.keys())
-            rmse_values = list(rmse.values())
-            
-            bars = plt.bar(models, rmse_values, color=colors)
-            plt.title('Root Mean Square Error (RMSE) by Model')
-            plt.xlabel('Model')
-            plt.ylabel('RMSE (EUR)')
-            plt.grid(True, axis='y')
-            
-            # Add RMSE values on top of the bars
-            for bar in bars:
-                height = bar.get_height()
-                plt.text(bar.get_x() + bar.get_width()/2., height,
-                        f'{height:,.0f}',
-                        ha='center', va='bottom', rotation=0)
-            
-            # Save plot
-            plt.savefig(os.path.join(output_dir, 'rmse_comparison.png'), dpi=300, bbox_inches='tight')
-            plt.close()
-            logger.info(f"RMSE comparison plot saved to {os.path.join(output_dir, 'rmse_comparison.png')}")

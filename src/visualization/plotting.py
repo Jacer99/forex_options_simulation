@@ -1,7 +1,8 @@
 """
-Visualization Module
+Modified Visualization Module
 
 This module provides functions for visualizing the portfolio of options and model performance.
+EGARCH model has been completely removed.
 """
 
 import os
@@ -167,7 +168,7 @@ def plot_model_comparison(options_data, metric='price', output_dir=None, filenam
     
     # Check if required columns exist
     if metric == 'price':
-        required_columns = ['bs_price', 'egarch_price', 'jd_price', 'sabr_price', 'notional']
+        required_columns = ['bs_price', 'jd_price', 'sabr_price', 'notional']  # EGARCH removed
         missing_columns = [col for col in required_columns if col not in options_data.columns]
         if missing_columns:
             logger.error(f"Missing required columns: {missing_columns}")
@@ -176,7 +177,6 @@ def plot_model_comparison(options_data, metric='price', output_dir=None, filenam
         # Calculate total prices
         total_prices = {
             'Black-Scholes': (options_data['bs_price'] * options_data['notional']).sum(),
-            'E-GARCH MC': (options_data['egarch_price'] * options_data['notional']).sum(),
             'Jump-Diffusion': (options_data['jd_price'] * options_data['notional']).sum(),
             'SABR': (options_data['sabr_price'] * options_data['notional']).sum()
         }
@@ -185,7 +185,7 @@ def plot_model_comparison(options_data, metric='price', output_dir=None, filenam
         fig, ax = plt.subplots()
         models = list(total_prices.keys())
         values = list(total_prices.values())
-        colors = ['blue', 'green', 'red', 'purple']
+        colors = ['blue', 'red', 'purple']  # EGARCH color (green) removed
         
         bars = ax.bar(models, values, color=colors)
         ax.set_xlabel('Model')
@@ -204,7 +204,7 @@ def plot_model_comparison(options_data, metric='price', output_dir=None, filenam
                     ha='center', va='bottom', rotation=0)
         
     elif metric == 'pnl':
-        required_columns = ['bs_pnl', 'egarch_pnl', 'jd_pnl', 'sabr_pnl']
+        required_columns = ['bs_pnl', 'jd_pnl', 'sabr_pnl']  # EGARCH removed
         missing_columns = [col for col in required_columns if col not in options_data.columns]
         if missing_columns:
             logger.error(f"Missing required columns: {missing_columns}")
@@ -213,7 +213,6 @@ def plot_model_comparison(options_data, metric='price', output_dir=None, filenam
         # Calculate total PnL
         total_pnl = {
             'Black-Scholes': options_data['bs_pnl'].sum(),
-            'E-GARCH MC': options_data['egarch_pnl'].sum(),
             'Jump-Diffusion': options_data['jd_pnl'].sum(),
             'SABR': options_data['sabr_pnl'].sum()
         }
@@ -222,7 +221,7 @@ def plot_model_comparison(options_data, metric='price', output_dir=None, filenam
         fig, ax = plt.subplots()
         models = list(total_pnl.keys())
         values = list(total_pnl.values())
-        colors = ['blue', 'green', 'red', 'purple']
+        colors = ['blue', 'red', 'purple']  # EGARCH color (green) removed
         
         bars = ax.bar(models, values, color=colors)
         ax.set_xlabel('Model')
@@ -315,7 +314,7 @@ def plot_error_metrics(metrics_df, output_dir=None, filename='error_metrics.png'
     if num_metrics == 1:
         axes = [axes]
     
-    colors = ['blue', 'green', 'red', 'purple']
+    colors = ['blue', 'red', 'purple']  # EGARCH color (green) removed
     
     # Plot each metric
     for i, metric in enumerate(available_metrics):
@@ -428,7 +427,7 @@ def plot_price_vs_strike(options_data, output_dir=None, filename='price_vs_strik
     set_plot_style()
     
     # Check if required columns exist
-    required_columns = ['strike_price', 'bs_price', 'egarch_price', 'jd_price', 'sabr_price']
+    required_columns = ['strike_price', 'bs_price', 'jd_price', 'sabr_price']  # EGARCH removed
     missing_columns = [col for col in required_columns if col not in options_data.columns]
     if missing_columns:
         logger.error(f"Missing required columns: {missing_columns}")
@@ -440,8 +439,6 @@ def plot_price_vs_strike(options_data, output_dir=None, filename='price_vs_strik
     # Plot price vs. strike for each model
     ax.scatter(options_data['strike_price'], options_data['bs_price'], 
                label='Black-Scholes', color='blue', alpha=0.7)
-    ax.scatter(options_data['strike_price'], options_data['egarch_price'], 
-               label='E-GARCH MC', color='green', alpha=0.7)
     ax.scatter(options_data['strike_price'], options_data['jd_price'], 
                label='Jump-Diffusion', color='red', alpha=0.7)
     ax.scatter(options_data['strike_price'], options_data['sabr_price'], 
@@ -576,7 +573,7 @@ def create_dashboard(options_data, market_data, metrics_df=None, output_dir='out
     figure_paths.append(os.path.join(output_dir, 'option_distribution.png'))
     
     # Plot price vs. strike
-    if all(col in options_data.columns for col in ['strike_price', 'bs_price', 'egarch_price', 'jd_price', 'sabr_price']):
+    if all(col in options_data.columns for col in ['strike_price', 'bs_price', 'jd_price', 'sabr_price']):  # EGARCH removed
         fig = plot_price_vs_strike(options_data, output_dir, 'price_vs_strike.png')
         figure_paths.append(os.path.join(output_dir, 'price_vs_strike.png'))
     
@@ -586,12 +583,12 @@ def create_dashboard(options_data, market_data, metrics_df=None, output_dir='out
         figure_paths.append(os.path.join(output_dir, 'volatility_smile.png'))
     
     # Plot model comparison (prices)
-    if all(col in options_data.columns for col in ['bs_price', 'egarch_price', 'jd_price', 'sabr_price', 'notional']):
+    if all(col in options_data.columns for col in ['bs_price', 'jd_price', 'sabr_price', 'notional']):  # EGARCH removed
         fig = plot_model_comparison(options_data, 'price', output_dir, 'model_comparison_price.png')
         figure_paths.append(os.path.join(output_dir, 'model_comparison_price.png'))
     
     # Plot model comparison (PnL)
-    if all(col in options_data.columns for col in ['bs_pnl', 'egarch_pnl', 'jd_pnl', 'sabr_pnl']):
+    if all(col in options_data.columns for col in ['bs_pnl', 'jd_pnl', 'sabr_pnl']):  # EGARCH removed
         fig = plot_model_comparison(options_data, 'pnl', output_dir, 'model_comparison_pnl.png')
         figure_paths.append(os.path.join(output_dir, 'model_comparison_pnl.png'))
     
