@@ -375,7 +375,7 @@ class PortfolioManager:
             # Calculate percentage errors (for non-zero actual payoffs)
             non_zero_payoffs = valid_options[valid_options['actual_payoff'] > 0]
             if len(non_zero_payoffs) > 0:
-                non_zero_payoffs[f'{model}_pct_error'] = (non_zero_payoffs[f'{model}_abs_error'] / 
+                non_zero_payoffs.loc[f'{model}_pct_error'] = (non_zero_payoffs[f'{model}_abs_error'] / 
                                                         non_zero_payoffs['actual_payoff']) * 100
             
             # Calculate metrics

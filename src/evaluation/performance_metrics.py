@@ -159,7 +159,7 @@ def calculate_model_comparison(options_data, models=None):
         pandas.DataFrame: DataFrame containing performance metrics for each model.
     """
     if models is None:
-        models = ['bs', 'egarch', 'jd', 'sabr']
+        models = ['bs', 'jd', 'sabr']
     
     # Check if required columns exist
     required_columns = ['actual_payoff', 'notional']
