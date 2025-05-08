@@ -1,9 +1,10 @@
 """
-Modified Main Script for Forex Options Portfolio Simulation
+Fixed Main Script for Forex Options Portfolio Simulation
 
-This script orchestrates the entire simulation process with significant changes:
-1. EGARCH model has been completely removed
-2. All options now use the same fixed spot rate from config
+This script orchestrates the entire simulation process with significant improvements:
+1. Each option now uses the appropriate spot rate for its issue date
+2. Removed forced overwriting of spot rates for realistic simulation
+3. Maintains all other functionality from the original script
 """
 
 import os
@@ -46,14 +47,14 @@ def generate_data(config):
     logger.info("Starting data generation phase")
     start_time = time.time()
     
-    # Generate option contracts with fixed spot rate
-    generator = OptionGenerator(config_path='config.yaml')
-    options_data = generator.generate_portfolio()
-    generator.save_portfolio_to_csv()
-    
-    # Generate market data
+    # First generate market data
     market_handler = MarketDataHandler(config_path='config.yaml')
     market_data = market_handler.generate_market_data(save=True)
+    
+    # Then generate option contracts using market data to get accurate spot rates
+    generator = OptionGenerator(config_path='config.yaml', market_data=market_data)
+    options_data = generator.generate_portfolio()
+    generator.save_portfolio_to_csv()
     
     elapsed = time.time() - start_time
     logger.info(f"Data generation phase completed in {elapsed:.2f} seconds")
@@ -63,11 +64,6 @@ def load_data(config):
     """Load previously generated option contracts and market data with validation."""
     logger.info("Loading existing data")
     start_time = time.time()
-    
-    # Get fixed spot rate from config
-    fixed_spot = config['market']['spot_price']
-    fixed_eur_rate = config['market']['eur_interest_rate']
-    fixed_tnd_rate = config['market']['tnd_interest_rate']
     
     # Load option contracts
     options_file = "data/generated/option_contracts.csv"
@@ -79,17 +75,14 @@ def load_data(config):
         options_data = pd.read_csv(options_file)
         logger.info(f"Loaded {len(options_data)} option contracts")
         
-        # Force all options to use the fixed spot rate
-        options_data['spot_rate_at_issue'] = fixed_spot
-        options_data['domestic_rate'] = fixed_eur_rate
-        options_data['foreign_rate'] = fixed_tnd_rate
-        
         # Validate essential columns
-        required_columns = ['option_id', 'strike_price', 'days_to_maturity', 'issue_date', 'maturity_date', 'notional', 'type']
+        required_columns = ['option_id', 'strike_price', 'days_to_maturity', 'issue_date', 
+                            'maturity_date', 'notional', 'type', 'spot_rate_at_issue']
         missing_columns = [col for col in required_columns if col not in options_data.columns]
         if missing_columns:
             logger.error(f"Options data missing required columns: {missing_columns}")
             return None, None
+            
     except Exception as e:
         logger.error(f"Error loading options data: {e}")
         return None, None
@@ -132,13 +125,13 @@ def process_batch(batch_data):
     batch, market_data_tuple = batch_data
     # Create a temporary portfolio manager for this batch
     local_manager = PortfolioManager(batch, market_data_tuple)
-    # Price with all models (EGARCH removed)
+    # Price with all models
     priced_batch = local_manager.price_portfolio()
     return priced_batch
 
 def price_portfolio(options_data, market_data, config, use_parallel=True):
     """
-    Price the portfolio using available pricing models (EGARCH removed).
+    Price the portfolio using available pricing models.
     
     Args:
         options_data: Options data DataFrame
@@ -152,7 +145,7 @@ def price_portfolio(options_data, market_data, config, use_parallel=True):
     logger.info("Starting portfolio pricing phase")
     start_time = time.time()
     
-    # Initialize portfolio manager with fixed spot rate
+    # Initialize portfolio manager
     portfolio_manager = PortfolioManager(options_data, market_data)
     
     if use_parallel and len(options_data) > 20:  # Only parallelize for larger portfolios
@@ -277,9 +270,9 @@ def visualize_results(portfolio_manager, options_data, market_data, metrics, out
     return figure_paths
 
 def main():
-    """Main function to run the modified Forex Options Portfolio Simulation."""
+    """Main function to run the Forex Options Portfolio Simulation."""
     overall_start_time = time.time()
-    logger.info("Starting Modified Forex Options Portfolio Simulation")
+    logger.info("Starting Fixed Forex Options Portfolio Simulation")
     
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Forex Options Portfolio Simulation")
@@ -335,7 +328,7 @@ def main():
         logger.info("Skipping visualization phase")
     
     overall_elapsed = time.time() - overall_start_time
-    logger.info(f"Modified Forex Options Portfolio Simulation completed in {overall_elapsed:.2f} seconds. Results saved to {output_dir}")
+    logger.info(f"Fixed Forex Options Portfolio Simulation completed in {overall_elapsed:.2f} seconds. Results saved to {output_dir}")
 
 if __name__ == "__main__":
     main()

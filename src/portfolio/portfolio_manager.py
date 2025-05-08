@@ -1,9 +1,9 @@
 """
-Modified Portfolio Manager Module
+Modified Portfolio Manager Module - FIXED VERSION
 
 This module manages a portfolio of European FX options and provides functions
 for pricing, risk management, and performance evaluation.
-The EGARCH model has been removed, and all options now use the same spot rate.
+Now respects the original spot rates for each option based on its issue date.
 """
 
 import os
@@ -16,7 +16,6 @@ import matplotlib.pyplot as plt
 
 # Import pricing models
 from src.models.black_scholes import BlackScholesModel
-# EGARCH model has been removed
 from src.models.jump_diffusion import JumpDiffusionModel
 from src.models.sabr import SABRModel
 
@@ -45,20 +44,18 @@ class PortfolioManager:
         
         # Initialize pricing models
         self.bs_model = BlackScholesModel()
-        # EGARCH model has been removed
         self.jd_model = JumpDiffusionModel(config_path)
         self.sabr_model = SABRModel(config_path)
         
         # Set options and market data
-        self.options_data = options_data
+        if isinstance(options_data, list):
+            self.options_data = pd.DataFrame(options_data)
+        else:
+            self.options_data = options_data
+            
         self.market_data = market_data
         
-        # Use fixed spot rate for all options
-        self.fixed_spot_rate = self.market_config['spot_price']
-        self.fixed_eur_rate = self.market_config['eur_interest_rate']
-        self.fixed_tnd_rate = self.market_config['tnd_interest_rate']
-        
-        logger.info("Portfolio Manager initialized with fixed spot rate: %s", self.fixed_spot_rate)
+        logger.info("Portfolio Manager initialized")
     
     def _load_config(self, config_path):
         """
@@ -86,14 +83,8 @@ class PortfolioManager:
         """
         try:
             df = pd.read_csv(filepath)
-            
-            # Set all options to use the fixed spot rate
-            df['spot_rate_at_issue'] = self.fixed_spot_rate
-            df['domestic_rate'] = self.fixed_eur_rate
-            df['foreign_rate'] = self.fixed_tnd_rate
-            
             self.options_data = df
-            logger.info(f"Options data loaded from {filepath} with fixed spot rate {self.fixed_spot_rate}")
+            logger.info(f"Options data loaded from {filepath}")
             return df
         except Exception as e:
             logger.error(f"Error loading options data: {e}")
@@ -111,7 +102,7 @@ class PortfolioManager:
     
     def price_portfolio(self):
         """
-        Price the portfolio using all available pricing models (except EGARCH).
+        Price the portfolio using all available pricing models.
         
         Returns:
             pandas.DataFrame: Options data with added pricing information.
@@ -129,27 +120,12 @@ class PortfolioManager:
         # Make a copy of the options data
         df = self.options_data.copy()
         
-        # Set all options to use the fixed spot rate
-        df['spot_rate_at_issue'] = self.fixed_spot_rate
-        df['domestic_rate'] = self.fixed_eur_rate
-        df['foreign_rate'] = self.fixed_tnd_rate
-        
         # First, price with Black-Scholes to get implied volatilities
         df = self.bs_model.price_options_portfolio(df, self.market_data)
         
-        # Then, price with other models (except EGARCH)
+        # Then, price with other models
         df = self.jd_model.price_options_portfolio(df, self.market_data)
         df = self.sabr_model.price_options_portfolio(df, self.market_data)
-        
-        # Remove EGARCH price column if it exists
-        if 'egarch_price' in df.columns:
-            df = df.drop(columns=['egarch_price'])
-            if 'egarch_pnl' in df.columns:
-                df = df.drop(columns=['egarch_pnl'])
-            if 'egarch_bs_spread' in df.columns:
-                df = df.drop(columns=['egarch_bs_spread'])
-            if 'egarch_abs_error' in df.columns:
-                df = df.drop(columns=['egarch_abs_error'])
         
         # Calculate model spreads
         if all(col in df.columns for col in ['bs_price', 'jd_price', 'sabr_price']):
@@ -186,13 +162,13 @@ class PortfolioManager:
         # Calculate risks for each option using Black-Scholes model
         for i, option in df.iterrows():
             try:
-                # Calculate the Greeks
+                # Calculate the Greeks using option's own rates
                 greeks = self.bs_model.calculate_greeks(
-                    spot=self.fixed_spot_rate,
+                    spot=option['spot_rate_at_issue'],
                     strike=option['strike_price'],
                     days_to_maturity=option['days_to_maturity'],
-                    domestic_rate=self.fixed_eur_rate,
-                    foreign_rate=self.fixed_tnd_rate,
+                    domestic_rate=option['domestic_rate'],
+                    foreign_rate=option['foreign_rate'],
                     volatility=option['implied_volatility'],
                     option_type=option['type']
                 )
@@ -295,7 +271,7 @@ class PortfolioManager:
         df = self.options_data.copy()
         
         # Add columns for PnL if they don't exist
-        for col in ['bs_pnl', 'jd_pnl', 'sabr_pnl']:  # EGARCH removed
+        for col in ['bs_pnl', 'jd_pnl', 'sabr_pnl']:  
             if col not in df.columns:
                 df[col] = np.nan
         
@@ -354,7 +330,7 @@ class PortfolioManager:
         df = self.options_data.copy()
         
         # Calculate performance metrics for each model
-        models = ['bs', 'jd', 'sabr']  # EGARCH removed
+        models = ['bs', 'jd', 'sabr']
         metrics = {}
         
         for model in models:
@@ -375,7 +351,6 @@ class PortfolioManager:
             # Calculate percentage errors (for non-zero actual payoffs)
             non_zero_payoffs = valid_options[valid_options['actual_payoff'] > 0].copy()
             if len(non_zero_payoffs) > 0:
-                # FIXED: Create a new column instead of trying to create a new row
                 non_zero_payoffs[f'{model}_pct_error'] = (non_zero_payoffs[f'{model}_abs_error'] / 
                                                           non_zero_payoffs['actual_payoff']) * 100
             
@@ -430,9 +405,9 @@ class PortfolioManager:
         logger.info(f"Options analysis saved to {os.path.join(output_dir, 'options_analysis.csv')}")
         
         # Calculate and save portfolio summary
-        if all(col in self.options_data.columns for col in ['bs_price', 'jd_price', 'sabr_price']):  # EGARCH removed
+        if all(col in self.options_data.columns for col in ['bs_price', 'jd_price', 'sabr_price']):
             summary = pd.DataFrame({
-                'Model': ['Black-Scholes', 'Jump-Diffusion', 'SABR'],  # EGARCH removed
+                'Model': ['Black-Scholes', 'Jump-Diffusion', 'SABR'],
                 'Total_Price': [
                     (self.options_data['bs_price'] * self.options_data['notional']).sum(),
                     (self.options_data['jd_price'] * self.options_data['notional']).sum(),
@@ -441,7 +416,7 @@ class PortfolioManager:
             })
             
             # Add PnL information if available
-            if all(col in self.options_data.columns for col in ['bs_pnl', 'jd_pnl', 'sabr_pnl']):  # EGARCH removed
+            if all(col in self.options_data.columns for col in ['bs_pnl', 'jd_pnl', 'sabr_pnl']):
                 summary['Total_PnL'] = [
                     self.options_data['bs_pnl'].sum(),
                     self.options_data['jd_pnl'].sum(),
@@ -449,7 +424,7 @@ class PortfolioManager:
                 ]
             
             # Add error metrics if available
-            error_columns = ['bs_abs_error', 'jd_abs_error', 'sabr_abs_error']  # EGARCH removed
+            error_columns = ['bs_abs_error', 'jd_abs_error', 'sabr_abs_error']
             if all(col in self.options_data.columns for col in error_columns):
                 summary['RMSE'] = [
                     np.sqrt((self.options_data['bs_abs_error'] ** 2).mean()),
@@ -481,7 +456,7 @@ class PortfolioManager:
         os.makedirs(output_dir, exist_ok=True)
         
         # Check if PnL information is available
-        if not all(col in self.options_data.columns for col in ['bs_pnl', 'jd_pnl', 'sabr_pnl']):  # EGARCH removed
+        if not all(col in self.options_data.columns for col in ['bs_pnl', 'jd_pnl', 'sabr_pnl']):
             logger.error("PnL information not available. Calculate PnL first.")
             return
         
@@ -489,14 +464,14 @@ class PortfolioManager:
         total_pnl = {
             'Black-Scholes': self.options_data['bs_pnl'].sum(),
             'Jump-Diffusion': self.options_data['jd_pnl'].sum(),
-            'SABR': self.options_data['sabr_pnl'].sum()  # EGARCH removed
+            'SABR': self.options_data['sabr_pnl'].sum()
         }
         
         # Create figure for total PnL comparison
         plt.figure(figsize=(12, 6))
         models = list(total_pnl.keys())
         pnls = list(total_pnl.values())
-        colors = ['blue', 'red', 'purple']  # EGARCH color removed
+        colors = ['blue', 'red', 'purple']
         
         bars = plt.bar(models, pnls, color=colors)
         plt.title('Total PnL by Model')
@@ -508,7 +483,7 @@ class PortfolioManager:
         for bar in bars:
             height = bar.get_height()
             plt.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{height:,.0f}',
+                    f'€{height:,.0f}',
                     ha='center', va='bottom', rotation=0)
         
         # Save plot

@@ -1,9 +1,9 @@
 """
-Modified Option Contract Generator Module
+Option Contract Generator Module - FIXED VERSION
 
 This module generates synthetic European call option contracts on EUR/TND
 with realistic parameters within the specified constraints.
-All options now use the same fixed spot rate from config.
+Each option now uses the appropriate spot rate for its issue date.
 """
 
 import os
@@ -26,12 +26,13 @@ logger = logging.getLogger(__name__)
 class OptionGenerator:
     """Generates synthetic European call option contracts."""
     
-    def __init__(self, config_path='config.yaml'):
+    def __init__(self, config_path='config.yaml', market_data=None):
         """
         Initialize the OptionGenerator with configuration parameters.
         
         Args:
             config_path (str): Path to the configuration YAML file.
+            market_data (tuple, optional): Tuple of (spot_rates, volatility, interest_rates) DataFrames.
         """
         self.config = self._load_config(config_path)
         self.portfolio_config = self.config['portfolio']
@@ -46,12 +47,21 @@ class OptionGenerator:
         # Initialize empty portfolio
         self.options = []
         
-        # Use fixed rates from config for all options
-        self.fixed_spot_rate = self.market_config['spot_price']
-        self.fixed_eur_rate = self.market_config['eur_interest_rate']
-        self.fixed_tnd_rate = self.market_config['tnd_interest_rate']
+        # Store market data if provided
+        self.market_data = market_data
+        self.spot_rates = None
+        self.interest_rates = None
         
-        logger.info("Option Generator initialized with fixed spot rate: %s", self.fixed_spot_rate)
+        if market_data is not None:
+            self.spot_rates, _, self.interest_rates = market_data
+            # Convert dates to datetime for easier comparison
+            self.spot_rates['date'] = pd.to_datetime(self.spot_rates['date'])
+            self.interest_rates['date'] = pd.to_datetime(self.interest_rates['date'])
+            logger.info("Market data set for option generation")
+        else:
+            logger.warning("No market data provided. Will use fixed rates from config as fallback.")
+        
+        logger.info("Option Generator initialized")
     
     def _load_config(self, config_path):
         """
@@ -124,6 +134,47 @@ class OptionGenerator:
         notional = random.uniform(min_notional, max_notional)
         return round(notional / 10000) * 10000
     
+    def _get_rates_for_date(self, issue_date):
+        """
+        Get the spot rate and interest rates for a given date from market data.
+        
+        Args:
+            issue_date (datetime): Issue date to get rates for.
+            
+        Returns:
+            tuple: (spot_rate, eur_rate, tnd_rate)
+        """
+        # Use market data if available
+        if self.spot_rates is not None and self.interest_rates is not None:
+            # Get spot rate at issue date (using the closest available date)
+            spot_data = self.spot_rates[self.spot_rates['date'] <= issue_date]
+            if not spot_data.empty:
+                spot_rate = spot_data.iloc[-1]['EUR/TND']
+            else:
+                # Fall back to config value
+                spot_rate = self.market_config['spot_price']
+                logger.warning(f"No spot rate data for {issue_date.strftime('%Y-%m-%d')}, using default: {spot_rate}")
+            
+            # Get interest rates at issue date
+            rates_data = self.interest_rates[self.interest_rates['date'] <= issue_date]
+            if not rates_data.empty:
+                rates = rates_data.iloc[-1]
+                eur_rate = rates['EUR_rate']
+                tnd_rate = rates['TND_rate']
+            else:
+                # Fall back to config values
+                eur_rate = self.market_config['eur_interest_rate']
+                tnd_rate = self.market_config['tnd_interest_rate']
+                logger.warning(f"No interest rate data for {issue_date.strftime('%Y-%m-%d')}, using defaults")
+        else:
+            # Fall back to config values
+            spot_rate = self.market_config['spot_price']
+            eur_rate = self.market_config['eur_interest_rate']
+            tnd_rate = self.market_config['tnd_interest_rate']
+            logger.warning("Using fixed rates from config (no market data available)")
+        
+        return spot_rate, eur_rate, tnd_rate
+    
     def _check_active_notional(self, date, proposed_notional=0):
         """
         Check if adding an option with the proposed notional would exceed 
@@ -177,10 +228,8 @@ class OptionGenerator:
                 logger.warning(f"Cannot add option at {issue_date.strftime('%Y-%m-%d')} - would exceed max active notional")
                 return None
         
-        # Use fixed spot rate and interest rates from config
-        spot_rate = self.fixed_spot_rate
-        eur_rate = self.fixed_eur_rate
-        tnd_rate = self.fixed_tnd_rate
+        # Get appropriate rates for the issue date
+        spot_rate, eur_rate, tnd_rate = self._get_rates_for_date(issue_date)
         
         # Create option contract
         option = {
@@ -192,10 +241,10 @@ class OptionGenerator:
             'issue_date': issue_date.strftime('%Y-%m-%d'),
             'maturity_date': maturity_date.strftime('%Y-%m-%d'),
             'days_to_maturity': (maturity_date - issue_date).days,
-            'spot_rate_at_issue': spot_rate,  # Use fixed spot rate
-            'domestic_rate': eur_rate,         # Use fixed interest rate
-            'foreign_rate': tnd_rate,          # Use fixed interest rate
-            # Strike price will be set slightly out of the money
+            'spot_rate_at_issue': spot_rate,  # Use date-appropriate spot rate
+            'domestic_rate': eur_rate,         # Use date-appropriate interest rate
+            'foreign_rate': tnd_rate,          # Use date-appropriate interest rate
+            # Strike price will be set slightly out of the money based on spot at issue date
             'strike_price': round(spot_rate * (1 + random.uniform(0.01, 0.1)), 4),
             'implied_volatility': None,  # Will be calculated by pricing models
             'bs_price': None,            # Black-Scholes price
@@ -214,7 +263,7 @@ class OptionGenerator:
             list: List of option contracts.
         """
         num_options = self.simulation_config['num_options']
-        logger.info(f"Generating portfolio with {num_options} option contracts using fixed spot rate {self.fixed_spot_rate}")
+        logger.info(f"Generating portfolio with {num_options} option contracts")
         
         self.options = []
         attempts = 0
@@ -308,7 +357,14 @@ class OptionGenerator:
 
 def main():
     """Main function to generate option contracts."""
-    generator = OptionGenerator()
+    from src.market_data.data_handler import MarketDataHandler
+    
+    # Generate market data first
+    market_handler = MarketDataHandler()
+    market_data = market_handler.generate_market_data(save=True)
+    
+    # Then use it for option generation
+    generator = OptionGenerator(market_data=market_data)
     generator.generate_portfolio()
     generator.save_portfolio_to_csv()
 
