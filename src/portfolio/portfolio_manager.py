@@ -373,10 +373,11 @@ class PortfolioManager:
                                                      valid_options[f'{model}_price'] * valid_options['notional'])
             
             # Calculate percentage errors (for non-zero actual payoffs)
-            non_zero_payoffs = valid_options[valid_options['actual_payoff'] > 0]
+            non_zero_payoffs = valid_options[valid_options['actual_payoff'] > 0].copy()
             if len(non_zero_payoffs) > 0:
-                non_zero_payoffs.loc[f'{model}_pct_error'] = (non_zero_payoffs[f'{model}_abs_error'] / 
-                                                        non_zero_payoffs['actual_payoff']) * 100
+                # FIXED: Create a new column instead of trying to create a new row
+                non_zero_payoffs[f'{model}_pct_error'] = (non_zero_payoffs[f'{model}_abs_error'] / 
+                                                          non_zero_payoffs['actual_payoff']) * 100
             
             # Calculate metrics
             metrics[model] = {
