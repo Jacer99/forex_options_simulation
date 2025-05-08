@@ -99,11 +99,6 @@ def load_data(config):
     logger.info("Loading existing data")
     start_time = time.time()
     
-    # Get fixed spot rate from config
-    fixed_spot = config['market']['spot_price']
-    fixed_eur_rate = config['market']['eur_interest_rate']
-    fixed_tnd_rate = config['market']['tnd_interest_rate']
-    
     # Load option contracts
     options_file = "data/generated/option_contracts.csv"
     if not os.path.exists(options_file):
@@ -114,10 +109,6 @@ def load_data(config):
         options_data = pd.read_csv(options_file)
         logger.info(f"Loaded {len(options_data)} option contracts")
         
-        # Force all options to use the fixed spot rate
-        options_data['spot_rate_at_issue'] = fixed_spot
-        options_data['domestic_rate'] = fixed_eur_rate
-        options_data['foreign_rate'] = fixed_tnd_rate
         
         # Validate essential columns
         required_columns = ['option_id', 'strike_price', 'days_to_maturity', 'issue_date', 'maturity_date', 'notional', 'type']

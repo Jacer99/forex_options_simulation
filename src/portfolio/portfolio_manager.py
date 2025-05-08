@@ -1,9 +1,9 @@
 """
-Modified Portfolio Manager Module - FIXED VERSION
+Fixed Portfolio Manager Module
 
 This module manages a portfolio of European FX options and provides functions
 for pricing, risk management, and performance evaluation.
-Now respects the original spot rates for each option based on its issue date.
+Always uses market rates from the issue date of each option.
 """
 
 import os
@@ -120,6 +120,14 @@ class PortfolioManager:
         # Make a copy of the options data
         df = self.options_data.copy()
         
+        # Unpack market data
+        spot_rates, volatility, interest_rates = self.market_data
+        
+        # Ensure date columns are in datetime format
+        spot_rates['date'] = pd.to_datetime(spot_rates['date'])
+        volatility['date'] = pd.to_datetime(volatility['date'])
+        interest_rates['date'] = pd.to_datetime(interest_rates['date'])
+        
         # First, price with Black-Scholes to get implied volatilities
         df = self.bs_model.price_options_portfolio(df, self.market_data)
         
@@ -131,6 +139,23 @@ class PortfolioManager:
         if all(col in df.columns for col in ['bs_price', 'jd_price', 'sabr_price']):
             df['jd_bs_spread'] = df['jd_price'] - df['bs_price']
             df['sabr_bs_spread'] = df['sabr_price'] - df['bs_price']
+        
+        # Check for unpriced options
+        unpriced_count = df[df['bs_price'].isna()].shape[0]
+        if unpriced_count > 0:
+            logger.warning(f"{unpriced_count} options could not be priced. Check market data coverage.")
+            
+            # Log details of unpriced options
+            for _, option in df[df['bs_price'].isna()].iterrows():
+                issue_date = pd.to_datetime(option['issue_date'])
+                
+                # Check if market data covers this date
+                has_spot = not spot_rates[spot_rates['date'] <= issue_date].empty
+                has_vol = not volatility[volatility['date'] <= issue_date].empty
+                has_rates = not interest_rates[interest_rates['date'] <= issue_date].empty
+                
+                logger.warning(f"Unpriced option {option['option_id']} with issue date {option['issue_date']}: " +
+                              f"Has spot data: {has_spot}, Has vol data: {has_vol}, Has rates data: {has_rates}")
         
         # Update the options data
         self.options_data = df
@@ -159,17 +184,49 @@ class PortfolioManager:
             if col not in df.columns:
                 df[col] = np.nan
         
+        # Unpack market data
+        spot_rates, volatility, interest_rates = self.market_data
+        
+        # Ensure date columns are in datetime format
+        spot_rates['date'] = pd.to_datetime(spot_rates['date'])
+        volatility['date'] = pd.to_datetime(volatility['date'])
+        interest_rates['date'] = pd.to_datetime(interest_rates['date'])
+        
         # Calculate risks for each option using Black-Scholes model
         for i, option in df.iterrows():
             try:
-                # Calculate the Greeks using option's own rates
+                # Get issue date
+                issue_date = pd.to_datetime(option['issue_date'])
+                
+                # Find market data at issue date
+                spot_data = spot_rates[spot_rates['date'] <= issue_date]
+                vol_data = volatility[volatility['date'] <= issue_date]
+                rates_data = interest_rates[interest_rates['date'] <= issue_date]
+                
+                # Check if we have all required data
+                if spot_data.empty or vol_data.empty or rates_data.empty:
+                    logger.warning(f"Missing market data for option {option['option_id']} on {issue_date}")
+                    continue
+                
+                # Get spot rate, volatility, and interest rates
+                spot = spot_data.iloc[-1]['EUR/TND']
+                vol = vol_data.iloc[-1]['historical_vol']
+                rates = rates_data.iloc[-1]
+                domestic_rate = rates['EUR_rate']
+                foreign_rate = rates['TND_rate']
+                
+                # If the option has an implied volatility, use it instead of historical
+                if 'implied_volatility' in option and not pd.isna(option['implied_volatility']):
+                    vol = option['implied_volatility']
+                
+                # Calculate the Greeks
                 greeks = self.bs_model.calculate_greeks(
-                    spot=option['spot_rate_at_issue'],
+                    spot=spot,
                     strike=option['strike_price'],
                     days_to_maturity=option['days_to_maturity'],
-                    domestic_rate=option['domestic_rate'],
-                    foreign_rate=option['foreign_rate'],
-                    volatility=option['implied_volatility'],
+                    domestic_rate=domestic_rate,
+                    foreign_rate=foreign_rate,
+                    volatility=vol,
                     option_type=option['type']
                 )
                 
@@ -220,6 +277,9 @@ class PortfolioManager:
         if 'actual_payoff' not in df.columns:
             df['actual_payoff'] = np.nan
         
+        # Ensure future_spot_rates date column is datetime
+        future_spot_rates['date'] = pd.to_datetime(future_spot_rates['date'])
+        
         # Calculate actual payoff for each option
         for i, option in df.iterrows():
             try:
@@ -227,7 +287,13 @@ class PortfolioManager:
                 maturity_date = pd.to_datetime(option['maturity_date'])
                 
                 # Find the spot rate at maturity
-                spot_at_maturity = future_spot_rates[future_spot_rates['date'] <= maturity_date].iloc[-1]['EUR/TND']
+                spot_at_maturity_data = future_spot_rates[future_spot_rates['date'] <= maturity_date]
+                
+                if spot_at_maturity_data.empty:
+                    logger.warning(f"No spot rate data for maturity date {maturity_date} for option {option['option_id']}")
+                    continue
+                
+                spot_at_maturity = spot_at_maturity_data.iloc[-1]['EUR/TND']
                 
                 # Calculate payoff
                 if option['type'].lower() == 'call':
@@ -342,6 +408,7 @@ class PortfolioManager:
             valid_options = df.dropna(subset=[f'{model}_price', 'actual_payoff'])
             
             if len(valid_options) == 0:
+                logger.warning(f"No valid options for evaluating {model} model performance")
                 continue
             
             # Calculate absolute errors
@@ -361,6 +428,7 @@ class PortfolioManager:
                 'max_abs_error': valid_options[f'{model}_abs_error'].max(),
                 'rmse': np.sqrt((valid_options[f'{model}_abs_error'] ** 2).mean()),
                 'total_pnl': valid_options[f'{model}_pnl'].sum(),
+                'num_options': len(valid_options),
             }
             
             # Add percentage error metrics if available
@@ -427,9 +495,9 @@ class PortfolioManager:
             error_columns = ['bs_abs_error', 'jd_abs_error', 'sabr_abs_error']
             if all(col in self.options_data.columns for col in error_columns):
                 summary['RMSE'] = [
-                    np.sqrt((self.options_data['bs_abs_error'] ** 2).mean()),
-                    np.sqrt((self.options_data['jd_abs_error'] ** 2).mean()),
-                    np.sqrt((self.options_data['sabr_abs_error'] ** 2).mean())
+                    np.sqrt((self.options_data['bs_abs_error'].dropna() ** 2).mean()),
+                    np.sqrt((self.options_data['jd_abs_error'].dropna() ** 2).mean()),
+                    np.sqrt((self.options_data['sabr_abs_error'].dropna() ** 2).mean())
                 ]
             
             summary.to_csv(os.path.join(output_dir, 'model_summary.csv'), index=False)
