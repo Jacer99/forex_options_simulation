@@ -1,10 +1,10 @@
 """
-Fixed Main Script for Forex Options Portfolio Simulation
+Modified Main Script for Forex Options Portfolio Simulation
 
-This script orchestrates the entire simulation process with significant improvements:
-1. Each option now uses the appropriate spot rate for its issue date
-2. Removed forced overwriting of spot rates for realistic simulation
-3. Maintains all other functionality from the original script
+This script orchestrates the entire simulation process with new options:
+1. Added command-line option to generate only new option contracts
+2. Reuses existing market data when generating new options
+3. Fixed conversion between list and DataFrame for options data
 """
 
 import os
@@ -42,28 +42,67 @@ def load_config(config_path='config.yaml'):
         config = yaml.safe_load(file)
     return config
 
-def generate_data(config):
-    """Generate option contracts and market data with progress reporting."""
-    logger.info("Starting data generation phase")
+def generate_full_data(config):
+    """Generate both market data and option contracts with progress reporting."""
+    logger.info("Starting full data generation phase")
     start_time = time.time()
     
-    # First generate market data
+    # Generate market data first
     market_handler = MarketDataHandler(config_path='config.yaml')
     market_data = market_handler.generate_market_data(save=True)
     
-    # Then generate option contracts using market data to get accurate spot rates
-    generator = OptionGenerator(config_path='config.yaml', market_data=market_data)
+    # Generate option contracts with fixed spot rate
+    generator = OptionGenerator(config_path='config.yaml')
+    generator.set_market_data(market_data)  # Provide market data to generator
     options_data = generator.generate_portfolio()
     generator.save_portfolio_to_csv()
     
+    # Convert to DataFrame for consistency
+    if isinstance(options_data, list):
+        options_data = pd.DataFrame(options_data)
+        logger.info(f"Converted list of {len(options_data)} option contracts to DataFrame")
+    
     elapsed = time.time() - start_time
-    logger.info(f"Data generation phase completed in {elapsed:.2f} seconds")
+    logger.info(f"Full data generation phase completed in {elapsed:.2f} seconds")
+    return options_data, market_data
+
+def generate_options_only(config):
+    """Generate only new option contracts while keeping existing market data."""
+    logger.info("Starting option generation phase with existing market data")
+    start_time = time.time()
+    
+    # Load existing market data first
+    market_handler = MarketDataHandler(config_path='config.yaml')
+    market_data = market_handler.load_market_data()
+    
+    if market_data[0] is None:
+        logger.error("Market data not found. Generate market data first or use --generate-full.")
+        return None, None
+    
+    # Generate new option contracts using existing market data
+    generator = OptionGenerator(config_path='config.yaml')
+    generator.set_market_data(market_data)  # Provide market data to generator
+    options_data = generator.generate_portfolio()
+    generator.save_portfolio_to_csv()
+    
+    # Convert to DataFrame for consistency
+    if isinstance(options_data, list):
+        options_data = pd.DataFrame(options_data)
+        logger.info(f"Converted list of {len(options_data)} option contracts to DataFrame")
+    
+    elapsed = time.time() - start_time
+    logger.info(f"Option generation phase completed in {elapsed:.2f} seconds")
     return options_data, market_data
 
 def load_data(config):
     """Load previously generated option contracts and market data with validation."""
     logger.info("Loading existing data")
     start_time = time.time()
+    
+    # Get fixed spot rate from config
+    fixed_spot = config['market']['spot_price']
+    fixed_eur_rate = config['market']['eur_interest_rate']
+    fixed_tnd_rate = config['market']['tnd_interest_rate']
     
     # Load option contracts
     options_file = "data/generated/option_contracts.csv"
@@ -75,14 +114,17 @@ def load_data(config):
         options_data = pd.read_csv(options_file)
         logger.info(f"Loaded {len(options_data)} option contracts")
         
+        # Force all options to use the fixed spot rate
+        options_data['spot_rate_at_issue'] = fixed_spot
+        options_data['domestic_rate'] = fixed_eur_rate
+        options_data['foreign_rate'] = fixed_tnd_rate
+        
         # Validate essential columns
-        required_columns = ['option_id', 'strike_price', 'days_to_maturity', 'issue_date', 
-                            'maturity_date', 'notional', 'type', 'spot_rate_at_issue']
+        required_columns = ['option_id', 'strike_price', 'days_to_maturity', 'issue_date', 'maturity_date', 'notional', 'type']
         missing_columns = [col for col in required_columns if col not in options_data.columns]
         if missing_columns:
             logger.error(f"Options data missing required columns: {missing_columns}")
             return None, None
-            
     except Exception as e:
         logger.error(f"Error loading options data: {e}")
         return None, None
@@ -125,16 +167,16 @@ def process_batch(batch_data):
     batch, market_data_tuple = batch_data
     # Create a temporary portfolio manager for this batch
     local_manager = PortfolioManager(batch, market_data_tuple)
-    # Price with all models
+    # Price with all models (EGARCH removed)
     priced_batch = local_manager.price_portfolio()
     return priced_batch
 
 def price_portfolio(options_data, market_data, config, use_parallel=True):
     """
-    Price the portfolio using available pricing models.
+    Price the portfolio using available pricing models (except EGARCH).
     
     Args:
-        options_data: Options data DataFrame
+        options_data: Options data (DataFrame or list)
         market_data: Market data tuple
         config: Configuration dictionary
         use_parallel: Whether to use parallel processing
@@ -145,7 +187,12 @@ def price_portfolio(options_data, market_data, config, use_parallel=True):
     logger.info("Starting portfolio pricing phase")
     start_time = time.time()
     
-    # Initialize portfolio manager
+    # Convert options_data to DataFrame if it's a list
+    if isinstance(options_data, list):
+        logger.info("Converting options list to DataFrame")
+        options_data = pd.DataFrame(options_data)
+    
+    # Initialize portfolio manager with fixed spot rate
     portfolio_manager = PortfolioManager(options_data, market_data)
     
     if use_parallel and len(options_data) > 20:  # Only parallelize for larger portfolios
@@ -241,14 +288,19 @@ def evaluate_performance(portfolio_manager, options_data):
     # Evaluate model performance
     metrics = portfolio_manager.evaluate_model_performance()
     
-    # Calculate and rank model performance metrics
-    model_comparison = calculate_model_comparison(options_data)
-    ranked_models = rank_models(model_comparison)
-    
-    # Log performance metrics
-    if model_comparison is not None:
-        for _, row in ranked_models.sort_values('overall_rank').iterrows():
-            logger.info(f"Model: {row['model']}, Rank: {row['overall_rank']:.1f}, RMSE: {row['rmse']:.6f}")
+    try:
+        # Calculate and rank model performance metrics
+        model_comparison = calculate_model_comparison(options_data)
+        ranked_models = rank_models(model_comparison)
+        
+        # Log performance metrics
+        if model_comparison is not None:
+            for _, row in ranked_models.sort_values('overall_rank').iterrows():
+                logger.info(f"Model: {row['model']}, Rank: {row['overall_rank']:.1f}, RMSE: {row['rmse']:.6f}")
+    except Exception as e:
+        logger.error(f"Error in model comparison calculation: {e}")
+        model_comparison = None
+        ranked_models = None
     
     elapsed = time.time() - start_time
     logger.info(f"Performance evaluation completed in {elapsed:.2f} seconds")
@@ -270,14 +322,16 @@ def visualize_results(portfolio_manager, options_data, market_data, metrics, out
     return figure_paths
 
 def main():
-    """Main function to run the Forex Options Portfolio Simulation."""
+    """Main function to run the modified Forex Options Portfolio Simulation."""
     overall_start_time = time.time()
-    logger.info("Starting Fixed Forex Options Portfolio Simulation")
+    logger.info("Starting Modified Forex Options Portfolio Simulation")
     
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Forex Options Portfolio Simulation")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to configuration file")
-    parser.add_argument("--generate", action="store_true", help="Generate new data instead of loading existing data")
+    data_group = parser.add_mutually_exclusive_group()
+    data_group.add_argument("--generate-full", action="store_true", help="Generate both market data and option contracts")
+    data_group.add_argument("--generate-options", action="store_true", help="Generate only new option contracts using existing market data")
     parser.add_argument("--output-dir", type=str, help="Output directory for results")
     parser.add_argument("--skip-pricing", action="store_true", help="Skip portfolio pricing phase")
     parser.add_argument("--skip-evaluation", action="store_true", help="Skip performance evaluation phase")
@@ -293,8 +347,10 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     
     # Generate or load data
-    if args.generate:
-        options_data, market_data = generate_data(config)
+    if args.generate_full:
+        options_data, market_data = generate_full_data(config)
+    elif args.generate_options:
+        options_data, market_data = generate_options_only(config)
     else:
         options_data, market_data = load_data(config)
     
@@ -316,7 +372,13 @@ def main():
     
     # Evaluate performance
     if not args.skip_evaluation:
-        metrics, model_comparison, ranked_models = evaluate_performance(portfolio_manager, options_data)
+        try:
+            metrics, model_comparison, ranked_models = evaluate_performance(portfolio_manager, options_data)
+        except Exception as e:
+            logger.error(f"Error in performance evaluation: {e}")
+            metrics = None
+            model_comparison = None
+            ranked_models = None
     else:
         metrics = None
         logger.info("Skipping performance evaluation phase")
@@ -328,7 +390,7 @@ def main():
         logger.info("Skipping visualization phase")
     
     overall_elapsed = time.time() - overall_start_time
-    logger.info(f"Fixed Forex Options Portfolio Simulation completed in {overall_elapsed:.2f} seconds. Results saved to {output_dir}")
+    logger.info(f"Modified Forex Options Portfolio Simulation completed in {overall_elapsed:.2f} seconds. Results saved to {output_dir}")
 
 if __name__ == "__main__":
     main()

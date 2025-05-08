@@ -27,9 +27,22 @@ def calculate_error_metrics(actual, predicted, weights=None):
     Returns:
         dict: Dictionary containing error metrics.
     """
-    # Convert to numpy arrays
-    actual = np.array(actual)
-    predicted = np.array(predicted)
+    # Convert to numpy arrays and ensure they're float type
+    try:
+        actual = np.array(actual, dtype=float)
+        predicted = np.array(predicted, dtype=float)
+    except (ValueError, TypeError) as e:
+        logger.error(f"Error converting to numerical arrays: {e}")
+        logger.error(f"Actual type: {type(actual)}, Predicted type: {type(predicted)}")
+        logger.error(f"Sample actual: {actual[:5] if hasattr(actual, '__getitem__') else actual}")
+        logger.error(f"Sample predicted: {predicted[:5] if hasattr(predicted, '__getitem__') else predicted}")
+        return {
+            'mae': np.nan,
+            'mse': np.nan,
+            'rmse': np.nan,
+            'mape': np.nan,
+            'r_squared': np.nan
+        }
     
     # Filter out NaN values
     valid_indices = ~np.isnan(actual) & ~np.isnan(predicted)
@@ -98,9 +111,19 @@ def calculate_pnl_metrics(actual_payoffs, option_prices, notionals):
         dict: Dictionary containing PnL metrics.
     """
     # Convert to numpy arrays
-    actual_payoffs = np.array(actual_payoffs)
-    option_prices = np.array(option_prices)
-    notionals = np.array(notionals)
+    try:
+        actual_payoffs = np.array(actual_payoffs, dtype=float)
+        option_prices = np.array(option_prices, dtype=float)
+        notionals = np.array(notionals, dtype=float)
+    except (ValueError, TypeError) as e:
+        logger.error(f"Error converting to numerical arrays in PnL calculation: {e}")
+        return {
+            'total_pnl': np.nan,
+            'mean_pnl': np.nan,
+            'pnl_std': np.nan,
+            'win_rate': np.nan,
+            'profit_factor': np.nan
+        }
     
     # Filter out NaN values
     valid_indices = ~np.isnan(actual_payoffs) & ~np.isnan(option_prices) & ~np.isnan(notionals)
@@ -153,7 +176,7 @@ def calculate_model_comparison(options_data, models=None):
     
     Args:
         options_data (pandas.DataFrame): Options data with actual payoffs and model prices.
-        models (list, optional): List of model names to compare. Defaults to ['bs', 'egarch', 'jd', 'sabr'].
+        models (list, optional): List of model names to compare. Defaults to ['bs', 'jd', 'sabr'].
         
     Returns:
         pandas.DataFrame: DataFrame containing performance metrics for each model.
@@ -185,12 +208,36 @@ def calculate_model_comparison(options_data, models=None):
             continue
         
         # Calculate error metrics
-        actual_costs = valid_data['actual_payoff']
-        predicted_costs = valid_data[price_col] * valid_data['notional']
-        error_metrics = calculate_error_metrics(actual_costs, predicted_costs)
+        try:
+            actual_costs = valid_data['actual_payoff'].astype(float)
+            predicted_costs = (valid_data[price_col] * valid_data['notional']).astype(float)
+            error_metrics = calculate_error_metrics(actual_costs, predicted_costs)
+        except Exception as e:
+            logger.error(f"Error calculating metrics for model {model}: {e}")
+            error_metrics = {
+                'mae': np.nan,
+                'mse': np.nan,
+                'rmse': np.nan,
+                'mape': np.nan,
+                'r_squared': np.nan
+            }
         
         # Calculate PnL metrics
-        pnl_metrics = calculate_pnl_metrics(valid_data['actual_payoff'], valid_data[price_col], valid_data['notional'])
+        try:
+            pnl_metrics = calculate_pnl_metrics(
+                valid_data['actual_payoff'],
+                valid_data[price_col], 
+                valid_data['notional']
+            )
+        except Exception as e:
+            logger.error(f"Error calculating PnL metrics for model {model}: {e}")
+            pnl_metrics = {
+                'total_pnl': np.nan,
+                'mean_pnl': np.nan,
+                'pnl_std': np.nan,
+                'win_rate': np.nan,
+                'profit_factor': np.nan
+            }
         
         # Combine metrics
         model_metrics = {
